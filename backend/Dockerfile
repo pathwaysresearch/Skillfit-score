@@ -6,8 +6,7 @@ COPY requirements.txt .
 
 # Install CPU-only torch first to avoid pulling 2GB+ CUDA wheels
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir google-cloud-storage
+    pip install --no-cache-dir -r requirements.txt
 
 # Download Jina embeddings model (ONNX + tokenizer, skip PyTorch weights)
 RUN python -c "\
@@ -17,10 +16,6 @@ snapshot_download( \
     local_dir='jina-embeddings-v3', \
     ignore_patterns=['*.bin', '*.pth', '*.safetensors', '*fp16*'] \
 )"
-
-# Download trained model artifacts from GCS
-COPY download_outputs.py .
-RUN python download_outputs.py
 
 COPY . .
 
