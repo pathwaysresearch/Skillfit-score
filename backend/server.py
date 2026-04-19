@@ -1,10 +1,12 @@
 import os
+import random
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import onnxruntime as ort
+import pyarrow.parquet as pq
 from transformers import AutoTokenizer, PretrainedConfig
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -12,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from collections import Counter
 
 app = FastAPI()
 
@@ -23,23 +24,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure outputs directory exists for static mounting
 os.makedirs("outputs", exist_ok=True)
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
-# --- Configuration & Paths ---
-OUTPUTS_DIR      = "outputs"
-MODEL_DIR        = "jina-embeddings-v3"
-ONNX_FILE        = "jina-embeddings-v3/onnx/model.onnx"
-PT_MODEL_FILE    = f"{OUTPUTS_DIR}/skill_projection_best.pt"
-TRAIN_VECS_128D  = f"{OUTPUTS_DIR}/train_embeddings_128d.npy"
-TRAIN_LABELS_NPY = f"{OUTPUTS_DIR}/train_labels.npy" 
+OUTPUTS_DIR   = "outputs"
+MODEL_DIR     = "jina-embeddings-v3"
+ONNX_FILE     = "jina-embeddings-v3/onnx/model.onnx"
+PT_MODEL_FILE = f"{OUTPUTS_DIR}/skill_projection_best.pt"
+TRAIN_VECS    = f"{OUTPUTS_DIR}/train_embeddings_128d.npy"
+TRAIN_LABELS  = f"{OUTPUTS_DIR}/train_labels.npy"
 
-K_NEIGHBORS      = 50
+K_NEIGHBORS = 50
 artifacts = {}
 
 # ==========================================
-# 1. PyTorch Model Architectures (UPDATED)
+# 1. PyTorch Model Architectures
 # ==========================================
 
 class AttnNet(nn.Module):
@@ -67,10 +66,7 @@ class CompressNet(nn.Module):
             nn.Linear(h2, out_dim), nn.LayerNorm(out_dim),
         )
         self.skip  = nn.Linear(in_dim, out_dim, bias=False)
-
-        # FIX: learnable scale — lets model control how "spread out" vectors are
-        # on the hypersphere, preventing trivial collapse to a small patch
-        self.scale = nn.Parameter(torch.tensor(10.0))   # init=10 per NormFace recommendation
+        self.scale = nn.Parameter(torch.tensor(10.0))
 
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -80,7 +76,7 @@ class CompressNet(nn.Module):
 
     def forward(self, x):
         z = F.normalize(self.main(x) + self.skip(x), p=2, dim=-1)
-        return self.scale * z    # scale after normalize — magnitude is now learnable
+        return self.scale * z
 
 
 class SkillProjectionModel(nn.Module):
@@ -88,9 +84,6 @@ class SkillProjectionModel(nn.Module):
         super().__init__()
         self.attn     = AttnNet(in_dim)
         self.compress = CompressNet(in_dim, out_dim=out_dim)
-
-        # FIX: Center loss centers — one 128-d center per group
-        # Updated via their own gradient at a slower LR
         self.centers  = nn.Parameter(
             F.normalize(torch.randn(n_groups, out_dim), p=2, dim=-1)
         )
@@ -103,30 +96,57 @@ class SkillProjectionModel(nn.Module):
 # ==========================================
 # 2. Helper Functions
 # ==========================================
+import re
+
+_TITLE_PREFIXES = re.compile(
+    r'^(job\s*title|title|position|role|job|designation|post|vacancy)\s*[:\-]\s*',
+    re.IGNORECASE
+)
+_SENIORITY = {
+    'senior', 'junior', 'lead', 'associate', 'principal', 'staff', 'head',
+    'chief', 'sr', 'jr', 'entry', 'mid', 'level', 'executive', 'assistant',
+}
+
 def extract_title_and_text(raw_text: str):
-    """Parses first line as title, rest as body."""
     lines = str(raw_text).strip().split('\n')
     title = lines[0].strip() if lines else "Unknown Job Title"
-    body = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    body  = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, body
 
+def parse_input_title(description: str) -> str:
+    first_line = description.strip().split('\n')[0].strip()
+    first_line = _TITLE_PREFIXES.sub('', first_line).strip()
+    return first_line
+
+def _title_words(title: str) -> set:
+    words = re.sub(r'[^a-z\s]', '', title.lower()).split()
+    return {w for w in words if w not in _SENIORITY and len(w) > 2}
+
+def titles_too_similar(input_title: str, candidate_title: str) -> bool:
+    w1 = _title_words(input_title)
+    w2 = _title_words(candidate_title)
+    if not w1 or not w2:
+        return False
+    overlap = w1 & w2
+    return len(overlap) / min(len(w1), len(w2)) >= 0.6
+
 def mean_pooling(model_output: np.ndarray, attention_mask: np.ndarray):
-    token_embeddings = model_output
-    input_mask_expanded = np.expand_dims(attention_mask, axis=-1)
-    input_mask_expanded = np.broadcast_to(input_mask_expanded, token_embeddings.shape)
-    sum_embeddings = np.sum(token_embeddings * input_mask_expanded, axis=1)
-    sum_mask = np.clip(np.sum(input_mask_expanded, axis=1), a_min=1e-9, a_max=None)
+    token_embeddings     = model_output
+    input_mask_expanded  = np.expand_dims(attention_mask, axis=-1)
+    input_mask_expanded  = np.broadcast_to(input_mask_expanded, token_embeddings.shape)
+    sum_embeddings       = np.sum(token_embeddings * input_mask_expanded, axis=1)
+    sum_mask             = np.clip(np.sum(input_mask_expanded, axis=1), a_min=1e-9, a_max=None)
     return sum_embeddings / sum_mask
 
 def embed_texts(texts: list[str]) -> np.ndarray:
     tokenizer, session, task_id = artifacts["tokenizer"], artifacts["session"], artifacts["task_id"]
     input_text = tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="np")
     inputs = {
-        "input_ids": input_text["input_ids"],
+        "input_ids":      input_text["input_ids"],
         "attention_mask": input_text["attention_mask"],
-        "task_id": np.array([task_id]*len(texts), dtype=np.int64),
+        "task_id":        np.array([task_id] * len(texts), dtype=np.int64),
     }
-    outputs = session.run(None, inputs)[0]
+    outputs    = session.run(None, inputs)[0]
     embeddings = mean_pooling(outputs, input_text["attention_mask"])
     return (embeddings / np.linalg.norm(embeddings, ord=2, axis=1, keepdims=True)).astype(np.float32)
 
@@ -136,40 +156,59 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 @app.on_event("startup")
 def load_artifacts():
     global artifacts
-    
-    providers = [('CUDAExecutionProvider', {'device_id': 0}), 'CPUExecutionProvider']
-    try: session = ort.InferenceSession(ONNX_FILE, providers=providers)
-    except Exception: session = ort.InferenceSession(ONNX_FILE, providers=['CPUExecutionProvider'])
 
+    # CPU-only — no GPU on Cloud Run
+    session   = ort.InferenceSession(ONNX_FILE, providers=["CPUExecutionProvider"])
     tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR, trust_remote_code=True)
-    task_id = PretrainedConfig.from_pretrained(MODEL_DIR).lora_adaptations.index('text-matching')
+    task_id   = PretrainedConfig.from_pretrained(MODEL_DIR).lora_adaptations.index("text-matching")
 
-    cleaned_df = pd.read_parquet(f"{OUTPUTS_DIR}/cleaned_data.parquet")
-    llm_jobs_df = pd.read_parquet(f"{OUTPUTS_DIR}/llm_ready_jobs.parquet")
-    
-    train_vecs = torch.from_numpy(np.load(TRAIN_VECS_128D)).float()
-    train_labels = np.load(TRAIN_LABELS_NPY, allow_pickle=True)
+    # --- cleaned_data: only load id + group columns, then convert to dicts and drop ---
+    schema       = pq.read_schema(f"{OUTPUTS_DIR}/cleaned_data.parquet")
+    id_col       = next((c for c in schema.names if "id" in c.lower()), "Job ID")
+    cleaned_df   = pd.read_parquet(f"{OUTPUTS_DIR}/cleaned_data.parquet",
+                                   columns=[id_col, "Assigned_Occupation_Group"])
 
+    # Precompute: sorted occupation counts list
+    occ_counts = (cleaned_df["Assigned_Occupation_Group"]
+                  .value_counts()
+                  .reset_index()
+                  .rename(columns={"index": "name", "Assigned_Occupation_Group": "count"})
+                  .to_dict(orient="records"))
+
+    # Precompute: group → list of job IDs (for sampling in occupation_jobs)
+    occ_id_map = cleaned_df.groupby("Assigned_Occupation_Group")[id_col].apply(list).to_dict()
+    del cleaned_df  # no longer needed
+
+    # --- llm_jobs: only load id + job_text, convert to dict for O(1) lookups ---
+    llm_schema  = pq.read_schema(f"{OUTPUTS_DIR}/llm_ready_jobs.parquet")
+    llm_id_col  = next((c for c in llm_schema.names if "id" in c.lower()), "Job ID")
+    llm_df      = pd.read_parquet(f"{OUTPUTS_DIR}/llm_ready_jobs.parquet",
+                                  columns=[llm_id_col, "job_text"])
+    job_text_lookup = dict(zip(llm_df[llm_id_col], llm_df["job_text"]))
+    del llm_df  # no longer needed
+
+    # --- Numpy arrays ---
+    train_vecs   = torch.from_numpy(np.load(TRAIN_VECS)).float()
+    train_labels = np.load(TRAIN_LABELS, allow_pickle=True)
     train_job_ids = np.load(f"{OUTPUTS_DIR}/train_job_ids.npy", allow_pickle=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Ensure n_groups matches the unique count in your labels
+    # --- PyTorch model ---
+    device   = torch.device("cpu")
     n_groups = len(np.unique(train_labels))
-    model = SkillProjectionModel(in_dim=1024, out_dim=128, n_groups=n_groups).to(device)
-    
+    model    = SkillProjectionModel(in_dim=1024, out_dim=128, n_groups=n_groups).to(device)
     if os.path.exists(PT_MODEL_FILE):
-        print(f"Loading trained model from {PT_MODEL_FILE}...")
         model.load_state_dict(torch.load(PT_MODEL_FILE, map_location=device))
     model.eval()
 
     artifacts = {
         "session": session, "tokenizer": tokenizer, "task_id": task_id,
-        "cleaned_df": cleaned_df, "llm_jobs_df": llm_jobs_df,
+        "occ_counts": occ_counts, "occ_id_map": occ_id_map,
+        "job_text_lookup": job_text_lookup,
         "model": model, "device": device,
-        "train_vecs": train_vecs.to(device), "train_labels": train_labels,
-        "train_job_ids": train_job_ids
+        "train_vecs": train_vecs, "train_labels": train_labels,
+        "train_job_ids": train_job_ids,
     }
-    print("Backend Server Ready (k-NN Mode)!")
+    print("Backend Server Ready!")
 
 # ==========================================
 # 4. API Endpoints
@@ -184,100 +223,77 @@ class PredictRequest(BaseModel):
 
 @app.post("/api/compare_jobs")
 def compare_jobs(req: CompareRequest):
-    vec1 = embed_texts([req.job1])
-    vec2 = embed_texts([req.job2])
-    vecs_1024 = np.vstack([vec1, vec2])
+    vecs_1024 = np.vstack([embed_texts([req.job1]), embed_texts([req.job2])])
     model, device = artifacts["model"], artifacts["device"]
-    
     with torch.no_grad():
         vecs_128 = model.project_vector(torch.from_numpy(vecs_1024).to(device))
         sim = F.cosine_similarity(vecs_128[0].unsqueeze(0), vecs_128[1].unsqueeze(0)).item()
-    
     return JSONResponse({"skill_fit_score": round(max(0.0, float(sim)) * 100, 2)})
+
 @app.post("/api/predict_occupation")
 def predict_occupation(req: PredictRequest):
     vec_1024 = embed_texts([req.description])
     model, device = artifacts["model"], artifacts["device"]
-    
+
     with torch.no_grad():
-        query_128 = model.project_vector(torch.from_numpy(vec_1024).to(device))
+        query_128   = model.project_vector(torch.from_numpy(vec_1024).to(device))
         similarities = F.cosine_similarity(query_128, artifacts["train_vecs"])
-        
-        # Use K_NEIGHBORS (200)
         topk_vals, topk_indices = torch.topk(similarities, K_NEIGHBORS)
-        topk_vals = topk_vals.cpu().numpy()
+        topk_vals   = topk_vals.cpu().numpy()
         topk_indices = topk_indices.cpu().numpy()
 
-    # 1. WEIGHTED VOTING: Score = Sum of Cosine Similarities
-    # This prevents high-frequency jobs from winning by "luck"
     group_scores = {}
     for idx, sim_score in zip(topk_indices, topk_vals):
         label = artifacts["train_labels"][idx]
         group_scores[label] = group_scores.get(label, 0) + float(sim_score)
 
     predicted_group = max(group_scores, key=group_scores.get)
-    confidence = group_scores[predicted_group] / sum(group_scores.values())
+    confidence      = group_scores[predicted_group] / sum(group_scores.values())
 
-    # 2. RETRIEVE ACTUAL NEIGHBORS (No random sampling)
-    llm_jobs_df = artifacts["llm_jobs_df"]
-    llm_id_col = next((c for c in llm_jobs_df.columns if "id" in c.lower()), "Job ID")
-    
-    similar_jobs = []
-    seen_titles = set()
-    
+    input_title     = parse_input_title(req.description)
+    job_text_lookup = artifacts["job_text_lookup"]
+    similar_jobs    = []
+    seen_titles     = set()
+
     for idx in topk_indices:
-        # Get the EXACT Job ID that matched this vector
-        neighbor_job_id = artifacts["train_job_ids"][idx]
-        
-        job_row = llm_jobs_df[llm_jobs_df[llm_id_col] == neighbor_job_id]
-        if job_row.empty: continue
-            
-        row = job_row.iloc[0]
-        title, body = extract_title_and_text(row["job_text"])
-        
-        if req.title and title.lower() == req.title.lower(): continue
+        job_id = artifacts["train_job_ids"][idx]
+        text   = job_text_lookup.get(job_id)
+        if text is None: continue
+
+        title, body = extract_title_and_text(text)
+        if titles_too_similar(input_title, title): continue
         if title.lower() in seen_titles: continue
-        
-        similar_jobs.append({
-            "job_id": str(neighbor_job_id),
-            "title": title,
-            "job_text": body
-        })
+
+        similar_jobs.append({"job_id": str(job_id), "title": title, "job_text": body})
         seen_titles.add(title.lower())
         if len(similar_jobs) >= 10: break
 
     return JSONResponse({
         "predicted_group": str(predicted_group),
         "confidence": round(confidence, 3),
-        "similar_jobs": similar_jobs
+        "similar_jobs": similar_jobs,
     })
 
 @app.get("/api/occupations")
 def get_occupations():
-    counts = artifacts["cleaned_df"]["Assigned_Occupation_Group"].value_counts().reset_index()
-    counts.columns = ["name", "count"]
-    return JSONResponse(counts.sort_values(by="count", ascending=False).to_dict(orient="records"))
+    return JSONResponse(artifacts["occ_counts"])
 
 @app.get("/api/occupation_jobs/{group_name}")
 def get_occupation_jobs(group_name: str):
-    cleaned_df, llm_jobs_df = artifacts["cleaned_df"], artifacts["llm_jobs_df"]
-    id_col = next((c for c in cleaned_df.columns if "id" in c.lower()), "Job ID")
-    llm_id_col = next((c for c in llm_jobs_df.columns if "id" in c.lower()), "Job ID")
+    id_pool = artifacts["occ_id_map"].get(group_name, [])
+    if not id_pool:
+        return JSONResponse([])
 
-    group_pool = cleaned_df[cleaned_df["Assigned_Occupation_Group"] == group_name]
-    if group_pool.empty: return JSONResponse([])
-        
-    sampled_ids = group_pool.sample(n=min(10, len(group_pool)))[id_col].values
-    jobs_data = llm_jobs_df[llm_jobs_df[llm_id_col].isin(sampled_ids)]
-    
-    output_jobs = []
-    for _, row in jobs_data.iterrows():
-        title, body = extract_title_and_text(row.get("job_text", "Unknown\nNo Content"))
-        output_jobs.append({
-            "title": title.upper(),
-            "job_text": body
-        })
-        
+    sampled_ids     = random.sample(id_pool, min(10, len(id_pool)))
+    job_text_lookup = artifacts["job_text_lookup"]
+    output_jobs     = []
+
+    for job_id in sampled_ids:
+        text = job_text_lookup.get(job_id)
+        if text is None: continue
+        title, body = extract_title_and_text(text)
+        output_jobs.append({"title": title.upper(), "job_text": body})
+
     return JSONResponse(output_jobs)
 
 if __name__ == "__main__":
