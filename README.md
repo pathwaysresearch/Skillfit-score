@@ -94,6 +94,7 @@ Open `http://localhost:3000`. The frontend reads `config.js` for the backend URL
 - Backend → Google Cloud Run (Dockerfile in `backend/`, artifacts pulled from GCS at build time)
 - Frontend → Vercel (reads `vercel.json`, `backend/` is ignored)
 
+
 After deploying, set your Cloud Run URL in `config.js`:
 ```js
 window.BACKEND_URL = "https://your-service.run.app";
