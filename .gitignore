@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+backend/jina-embeddings-v3/
+backend/outputs/
+

@@ -1,0 +1,9 @@
+transformers
+onnxruntime
+fastapi
+uvicorn
+pandas
+numpy
+pydantic
+pyarrow
+torch

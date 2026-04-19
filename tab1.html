@@ -1,0 +1,290 @@
+<div class="tab-header">
+    <h1>Project Overview: Skill-Fit Scoring</h1>
+    <p>Predicting transition feasibility using high-fidelity similarity scores in a metric-optimized skill space.</p>
+</div>
+
+<!-- Project Narrative Section -->
+<div class="project-story">
+    <section class="story-section">
+        <h2>1. The Project Mission</h2>
+        <p>The core objective is to predict a precise <strong>Skill-Fit Score</strong> for job transitions. By training an advanced neural model to maximize separation between occupational groups and calculating geometric similarity, I can mathematically determine if a job is transitionable or if the skill requirements are too diverse.</p>
+    </section>
+
+    <section class="story-section">
+        <h2>2. The Process: Step-by-Step</h2>
+        <div class="phase-grid">
+            <div class="glass-panel phase-card">
+                <span class="phase-num">Phase 1</span>
+                <h3>Cleaning & Pre-processing</h3>
+                <ul style="list-style: none; padding: 0;">
+                    <li>Regex-based pipeline to strip unrelated text/emojis.</li>
+                    <li>LLM-based job title normalization.</li>
+                    <li>Language detection (FastText) & English translation.</li>
+                </ul>
+            </div>
+            <div class="glass-panel phase-card">
+                <span class="phase-num">Phase 2</span>
+                <h3>High-Dimensional Embedding</h3>
+                <ul style="list-style: none; padding: 0;">
+                    <li>Jina AI Embeddings (1024D vectors).</li>
+                    <li>Captured rich contextual job identities.</li>
+                </ul>
+            </div>
+            <div class="glass-panel phase-card">
+                <span class="phase-num">Phase 3</span>
+                <h3>The 128D "Compressor"</h3>
+                <ul style="list-style: none; padding: 0;">
+                    <li>Skill Projection model (based on 2 papers).</li>
+                    <li>1024D -> 128D space.</li>
+                    <li>Improved angular separation by training.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="architecture-container">
+
+            <div class="arch-node" style="background:#f1f5f9; font-weight:600;">Input: K Job Postings &nbsp;[B, K, 1024]</div>
+            <div class="arch-arrow"></div>
+
+            <!-- AttnNet block -->
+            <div style="border:2px solid #6366f1; border-radius:12px; padding:1rem 1.5rem; background:#eef2ff; min-width:340px; text-align:center;">
+                <div style="font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#6366f1; margin-bottom:0.6rem;">AttnNet — Attention Aggregator</div>
+                <div style="display:flex; flex-direction:column; align-items:center; gap:0.4rem;">
+                    <div class="arch-node" style="width:100%; font-size:0.82rem;">Linear(1024 → 1) &nbsp;→&nbsp; scalar score per posting</div>
+                    <div class="arch-arrow" style="height:10px;"></div>
+                    <div class="arch-node" style="width:100%; font-size:0.82rem;">Softmax over K postings → importance weights</div>
+                    <div class="arch-arrow" style="height:10px;"></div>
+                    <div class="arch-node" style="width:100%; font-size:0.82rem;">Σ weight<sub>i</sub> · posting<sub>i</sub> → prototype</div>
+                </div>
+            </div>
+            <div class="arch-arrow"></div>
+
+            <div class="arch-node" style="background:#f1f5f9; font-weight:600;">Group Prototype &nbsp;[B, 1024]</div>
+            <div class="arch-arrow"></div>
+
+            <!-- CompressNet block with skip -->
+            <div style="border:2px solid #8b5cf6; border-radius:12px; padding:1rem 1.5rem; background:#f5f3ff; min-width:420px; text-align:center;">
+                <div style="font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#7c3aed; margin-bottom:0.75rem;">CompressNet — Skill Projection</div>
+                <div style="display:flex; gap:1rem; justify-content:center; align-items:stretch;">
+                    <!-- Main path -->
+                    <div style="display:flex; flex-direction:column; align-items:center; gap:0.35rem; flex:1;">
+                        <div style="font-size:0.68rem; font-weight:700; color:#7c3aed; text-transform:uppercase; margin-bottom:0.2rem;">Main Path</div>
+                        <div class="arch-node" style="font-size:0.78rem; width:100%;">Linear 1024 → 512<br><span style="font-size:0.7rem;color:var(--text-secondary);">LayerNorm · GELU · Dropout</span></div>
+                        <div class="arch-arrow" style="height:8px;"></div>
+                        <div class="arch-node" style="font-size:0.78rem; width:100%;">Linear 512 → 256<br><span style="font-size:0.7rem;color:var(--text-secondary);">LayerNorm · GELU · Dropout</span></div>
+                        <div class="arch-arrow" style="height:8px;"></div>
+                        <div class="arch-node" style="font-size:0.78rem; width:100%;">Linear 256 → 128 · LayerNorm</div>
+                    </div>
+                    <!-- VS divider -->
+                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; color:#94a3b8; font-weight:700; font-size:1rem;">⊕</div>
+                    <!-- Skip path -->
+                    <div style="display:flex; flex-direction:column; align-items:center; gap:0.35rem; flex:1;">
+                        <div style="font-size:0.68rem; font-weight:700; color:#7c3aed; text-transform:uppercase; margin-bottom:0.2rem;">Skip Connection</div>
+                        <div class="arch-node" style="font-size:0.78rem; width:100%;">Linear 1024 → 128<br><span style="font-size:0.7rem;color:var(--text-secondary);">no bias · no activation</span></div>
+                        <div style="font-size:0.72rem; color:var(--text-secondary); margin-top:0.5rem; font-style:italic;">preserves original<br>information directly</div>
+                    </div>
+                </div>
+                <div style="margin-top:0.85rem; display:flex; flex-direction:column; align-items:center; gap:0.35rem;">
+                    <div class="arch-arrow" style="height:10px;"></div>
+                    <div class="arch-node accent" style="font-size:0.82rem; min-width:260px;">L2 Normalize(main + skip)</div>
+                    <div class="arch-arrow" style="height:8px;"></div>
+                    <div class="arch-node accent" style="font-size:0.82rem; min-width:260px;">× scale &nbsp;<span style="font-size:0.72rem; font-weight:400;">(learnable, init=10.0 — NormFace)</span></div>
+                </div>
+            </div>
+            <div class="arch-arrow"></div>
+
+            <div class="arch-node" style="background:#f1f5f9; font-weight:600;">Output: 128D Skill Vector &nbsp;[B, 128]</div>
+
+        </div>
+    </section>
+
+    <section class="story-section">
+        <h2>3. Training Strategy: 2-Stage Metric Learning</h2>
+        <p><strong>Stage 1 — AttnNet Warm-up (6 epochs):</strong> Only AttnNet is trained. It learns to aggregate K noisy job postings into a clean group centroid using MSE loss. CompressNet is frozen. This establishes stable attention weights before harder metric learning begins.</p>
+        <p><strong>Stage 2 — Full End-to-End (up to 35 epochs, early stopping patience=10):</strong> Combined loss function with three terms:</p>
+        <div class="glass-panel" style="background: #1e293b; color: #e2e8f0; padding: 1.25rem 1.5rem; font-family: monospace; font-size: 0.88rem; border-color: #334155; margin: 1rem 0; border-radius: 10px;">
+            <pre style="margin: 0; line-height: 1.8;">L = 0.3 × L_triplet  +  0.7 × L_SupCon  +  0.01 × L_center
+
+triplet Loss — Cosine triplet, margin = 0.8  (NormFace recommendation)
+             ReLU(sim_AN − sim_AP + 0.8)
+             Negatives sampled from top-20 nearest neighbor groups
+
+SupCon Loss(NEW)  — In-batch Supervised Contrastive (τ = 0.10)
+             All 2B batch members as negatives; solves the "179 groups ignored" problem
+
+center Loss(NEW)  — Pulls intra-class embeddings toward their learned 128D class center
+             λ = 0.01 prevents over-compression</pre>
+        </div>
+        <p><strong>Key design choices:</strong> Learnable scale parameter (init=10.0) prevents hypersphere collapse. CosineAnnealingLR per step. Validation accuracy measured against <em>projected</em> 128D centroids — not raw 1024D — to avoid the centroid gravity trap.</p>
+    </section>
+
+    <section class="story-section">
+        <h2>4. Data Realities & Engineering Challenges</h2>
+        <div class="phase-grid">
+            <div class="glass-panel phase-card">
+                <span class="phase-num">Challenge</span>
+                <h3>Class Imbalance</h3>
+                <ul style="list-style: none; padding: 0;">
+                    <li>Some groups have thousands of rows; others have 1–2. Groups capped at 3,000 samples during training to prevent overfitting to dominant classes.</li>
+                </ul>
+            </div>
+            <div class="glass-panel phase-card">
+                <span class="phase-num">Challenge</span>
+                <h3>248,921 Unique Raw Titles</h3>
+                <ul style="list-style: none; padding: 0;">
+                    <li>Raw titles contained shift types, locations, seniority noise. Normalized using Qwen2.5-1.5B-Instruct with KV prefix caching (Faster).</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="story-section">
+        <h2>6. Results: 1024D vs. 128D Skill Space</h2>
+        <p>I compare three key structural representations of the skillset clusters in the original 1024D space vs. our custom 128D optimized Skill Space.</p>
+        
+        <h3 style="margin-bottom: 1rem; color: var(--text-primary);">A. Global Document Relationships</h3>
+        <p>Visualizing 600,000 job points to see how well occupational groups are separated.</p>
+        <div class="comparison-view">
+            <div class="comparison-pane">
+                <h4>Standard 1024D Space</h4>
+                <div class="viz-container">
+                    <iframe src="diagrams/viz_documents.html" scrolling="no"></iframe>
+                </div>
+                <a href="diagrams/viz_documents.html" target="_blank" class="external-viz-btn">Open Full View ↗</a>
+            </div>
+            <div class="comparison-pane">
+                <h4>Optimized 128D Space</h4>
+                <div class="viz-container">
+                    <iframe src="diagrams/viz_documents_128d.html" scrolling="no"></iframe>
+                </div>
+                <a href="diagrams/viz_documents_128d.html" target="_blank" class="external-viz-btn">Open Full View ↗</a>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: var(--text-primary);">B. Intertopic Distance Mapping</h3>
+        <p>Analyzing the semantic proximity between different occupation groups.</p>
+        <div class="comparison-view">
+            <div class="comparison-pane">
+                <h4>Standard 1024D Space</h4>
+                <div class="viz-container">
+                    <iframe src="diagrams/viz_intertopic.html" scrolling="no"></iframe>
+                </div>
+                <a href="diagrams/viz_intertopic.html" target="_blank" class="external-viz-btn">Open Full View ↗</a>
+            </div>
+            <div class="comparison-pane">
+                <h4>Optimized 128D Space</h4>
+                <div class="viz-container">
+                    <iframe src="diagrams/viz_intertopic_128d.html" scrolling="no"></iframe>
+                </div>
+                <a href="diagrams/viz_intertopic_128d.html" target="_blank" class="external-viz-btn">Open Full View ↗</a>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: var(--text-primary);">C. Hierarchical Skill Clustering</h3>
+        <p>Examining the nested tree structure of common skill requirements.</p>
+        <div class="comparison-view">
+            <div class="comparison-pane">
+                <h4>Standard 1024D Space</h4>
+                <div class="viz-container">
+                    <iframe src="diagrams/viz_hierarchical.html" scrolling="no"></iframe>
+                </div>
+                <a href="diagrams/viz_hierarchical.html" target="_blank" class="external-viz-btn">Open Full View ↗</a>
+            </div>
+            <div class="comparison-pane">
+                <h4>Optimized 128D Space</h4>
+                <div class="viz-container">
+                    <iframe src="diagrams/viz_hierarchical_128d.html" scrolling="no"></iframe>
+                </div>
+                <a href="diagrams/viz_hierarchical_128d.html" target="_blank" class="external-viz-btn">Open Full View ↗</a>
+            </div>
+        </div>
+
+        <p style="margin-top: 2rem; font-style: italic; font-size: 0.9rem; color: var(--text-secondary);">Note: Initially tried to make clusters using BERTopic before moving to using the provided Assigned Occupation Groups.</p>
+    </section>
+    <section class="story-section">
+        <h2>7. Validation Metrics and Scores</h2>
+        <p>To evaluate the success of the 128D projection, I compared the original 1024D Jina embeddings against the optimized 128D Skill embeddings across retrieval and clustering metrics.</p>
+
+        <h3 style="margin-bottom: 1rem; color: var(--text-primary);">A. Global Metric Comparison</h3>
+        <div class="glass-panel" style="padding: 1rem;">
+            <img src="diagrams/metric_comparison.png" alt="Recall@K and Clustering Quality Metrics" style="width: 100%; height: auto; display: block; border-radius: 6px;">
+        </div>
+        
+        <div class="glass-panel doc-card" style="margin-top: 1.5rem;">
+            <h4 style="margin-bottom: 0.5rem;">Metric Definitions:</h4>
+            <ul style="list-style: disc; padding-left: 1.5rem; line-height: 1.6;">
+                <li><strong>Recall@K:</strong> The percentage of times a job from the <em>same</em> occupation group is found within the top K nearest neighbors (assesses search/retrieval quality).</li>
+                <li><strong>Silhouette Score:</strong> A measure (-1 to 1) of how similar an object is to its own cluster compared to other clusters.</li>
+                <li><strong>Intra-Cluster Distance (↓):</strong> The average distance between jobs <em>within the same</em> occupation group (Lower = Tighter clusters).</li>
+                <li><strong>Inter-Cluster Distance (↑):</strong> The average distance between the centers of <em>different</em> occupation groups (Higher = Better separated categories).</li>
+                <li><strong>Separation (↑):</strong> The difference between Inter-Cluster and Intra-Cluster distances; positive values indicate distinct, non-overlapping groups.</li>
+            </ul>
+        </div>
+
+        <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: var(--text-primary);">B. Per-Group Silhouette Improvement</h3>
+        <p>While global metrics provide a macro view, looking at individual groups shows where the metric learning had the most impact.</p>
+        <div class="glass-panel" style="padding: 1rem;">
+            <img src="diagrams/per_group_silhouette.png" alt="Per-Group Silhouette Improvement" style="width: 100%; height: auto; display: block; border-radius: 6px;">
+        </div>
+
+        <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: var(--text-primary);">C. Final Summary & Analysis</h3>
+        <p>The 128D Skill Space improves every metric: retrieval, silhouette, and separation. The model crosses the critical threshold from <strong>negative to positive silhouette</strong>, meaning clusters are now internally coherent rather than just spread apart.</p>
+        
+        <div class="glass-panel" style="background: #1e293b; color: #e2e8f0; padding: 1.5rem; font-family: monospace; overflow-x: auto; margin-bottom: 1rem; border-color: #334155;">
+<pre style="margin: 0; line-height: 1.7;">============================================================
+FINAL SUMMARY
+============================================================
+  Recall@1   | Jina: 0.6279 | Skill: 0.6631 | Δ = +0.0352
+  Recall@5   | Jina: 0.8279 | Skill: 0.8486 | Δ = +0.0207
+  Recall@10  | Jina: 0.8795 | Skill: 0.8944 | Δ = +0.0148
+  Recall@20  | Jina: 0.9168 | Skill: 0.9258 | Δ = +0.0090
+  Recall@50  | Jina: 0.9514 | Skill: 0.9538 | Δ = +0.0024
+  MRR        | Jina: 0.7169 | Skill: 0.7453 | Δ = +0.0284
+
+  Silhouette | Jina: -0.0330 | Skill:  0.0405 | Δ = +0.0735
+  Intra Dist | Jina:  0.4520 | Skill:  0.3764 | Δ = -0.0756
+  Inter Dist | Jina:  0.3162 | Skill:  0.9624 | Δ = +0.6462
+  Separation | Jina: -0.1359 | Skill:  0.5860 | Δ = +0.7219
+
+  Per-group silhouette: 125 groups improved | 28 degraded
+  Average delta across all groups: +0.2533</pre>
+        </div>
+        <div class="glass-panel doc-card" style="margin-top: 1rem; border-left: 3px solid var(--accent-primary);">
+            <p><strong>Retrieval:</strong> All Recall@K and MRR metrics improved. Recall@1 +0.0352, MRR +0.0284 — the model finds the right occupation group more often and ranks it higher.</p>
+            <p style="margin-top: 0.5rem;"><strong>Clustering:</strong> Silhouette crossed from −0.0330 to <strong>+0.0405</strong> (the zero crossing is critical — clusters are now coherent). Intra-cluster distance tightened (−0.0756) while inter-cluster distance exploded +0.6462 and Separation +0.7219.</p>
+            <p style="margin-top: 0.5rem;"><strong>Per-group:</strong> 125 of 153 evaluated groups improved individually, with average silhouette delta of +0.2533 — not just global averaging, but occupation-level gains.</p>
+        </div>
+    </section>
+</div>
+
+<!-- Occupation Browser Section -->
+<div class="tab-header" style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 3rem;">
+    <h2>Occupation Group Browser</h2>
+    <p>Explore the real occupation categories identified in your 600K dataset and view ground-truth job postings.</p>
+</div>
+
+<div class="tab1-grid">
+    <div class="topics-panel glass-panel">
+        <div class="search-box">
+            <input type="text" id="occSearch" placeholder="Search occupations...">
+        </div>
+        <div class="topic-list" id="occList">
+            <!-- Populated by JS from /api/occupations -->
+            <div class="loader"></div>
+        </div>
+    </div>
+    
+    <div class="details-panel">
+        <div class="glass-panel topic-info-section" id="occDetails" style="display:none;">
+            <h2 id="detailOccName">Occupation Group</h2>
+            <div id="occStats" style="margin-bottom: 1.5rem; font-size: 0.9rem; color: var(--text-secondary);"></div>
+            <div class="representative-docs">
+                <h3>Sample LLM-Ready Descriptions</h3>
+                <div id="occJobs"></div>
+            </div>
+        </div>
+        <div id="occPlaceholder" class="glass-panel" style="padding: 2rem; text-align: center; opacity: 0.6;">
+            <p>Select an occupation group to view raw competency text</p>
+        </div>
+    </div>
+</div>

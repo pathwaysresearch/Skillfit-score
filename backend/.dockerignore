@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git
+.venv/
+*.ipynb
+
+# Exclude the fp16 model — only model.onnx + model.onnx_data are needed
+jina-embeddings-v3/onnx/model_fp16.onnx
+
+# Exclude any HuggingFace cache that may have ended up here
+.cache/
