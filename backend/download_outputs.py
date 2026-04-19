@@ -1,5 +1,5 @@
 from google.cloud import storage
-import os
+import os, requests
 
 BUCKET = "skillfit-artifacts"
 FILES = [
@@ -11,8 +11,18 @@ FILES = [
     "train_labels.npy",
 ]
 
+# Fetch project ID from GCP metadata server (available in Cloud Build and Cloud Run)
+try:
+    project_id = requests.get(
+        "http://metadata.google.internal/computeMetadata/v1/project/project-id",
+        headers={"Metadata-Flavor": "Google"},
+        timeout=3
+    ).text
+except Exception:
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+
 os.makedirs("outputs", exist_ok=True)
-client = storage.Client()
+client = storage.Client(project=project_id)
 bucket = client.bucket(BUCKET)
 
 for f in FILES:
