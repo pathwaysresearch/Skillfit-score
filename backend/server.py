@@ -169,11 +169,8 @@ def load_artifacts():
                                    columns=[id_col, "Assigned_Occupation_Group"])
 
     # Precompute: sorted occupation counts list
-    occ_counts = (cleaned_df["Assigned_Occupation_Group"]
-                  .value_counts()
-                  .reset_index()
-                  .rename(columns={"index": "name", "Assigned_Occupation_Group": "count"})
-                  .to_dict(orient="records"))
+    vc = cleaned_df["Assigned_Occupation_Group"].value_counts()
+    occ_counts = [{"name": k, "count": int(v)} for k, v in vc.items()]
 
     # Precompute: group → list of job IDs (for sampling in occupation_jobs)
     occ_id_map = cleaned_df.groupby("Assigned_Occupation_Group")[id_col].apply(list).to_dict()
