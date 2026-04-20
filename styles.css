@@ -967,6 +967,47 @@ textarea::placeholder {
 }
 
 @media (max-width: 1200px) {
+.neighbor-job-item {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+.neighbor-job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.65rem 0.9rem;
+    cursor: pointer;
+    user-select: none;
+    background: var(--bg-secondary);
+    transition: background 0.15s;
+}
+
+.neighbor-job-header:hover {
+    background: #eef2ff;
+}
+
+.neighbor-chevron {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+.neighbor-job-body {
+    display: none;
+    padding: 0.8rem 0.9rem;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    border-top: 1px solid var(--border-color);
+    max-height: 260px;
+    overflow-y: auto;
+}
+
     .inference-grid, .results-main-grid {
         grid-template-columns: 1fr;
     }

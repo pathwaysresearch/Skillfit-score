@@ -159,6 +159,21 @@ async function selectOccupation(name, element) {
     }
 }
 
+function toggleNeighborJob(i) {
+    const body    = document.getElementById(`neighbor-job-${i}`);
+    const chevron = document.getElementById(`chevron-${i}`);
+    const isOpen  = body.style.display === 'block';
+
+    if (isOpen) {
+        body.style.display = 'none';
+        chevron.style.transform = '';
+    } else {
+        body.textContent = (window._neighborJobs[i] || {}).job_text || '';
+        body.style.display = 'block';
+        chevron.style.transform = 'rotate(180deg)';
+    }
+}
+
 function showViz(vizType) {
     document.querySelectorAll('.viz-tab').forEach(b => b.classList.remove('active'));
     event.currentTarget.classList.add('active');
@@ -248,15 +263,23 @@ async function runInference() {
         const data = await response.json();
 
         // Format Similar Jobs list
+        // Store job texts for safe access on click (avoids embedding raw text in innerHTML)
+        window._neighborJobs = data.similar_jobs || [];
+
         let similarJobsHtml = '';
-        if (data.similar_jobs && data.similar_jobs.length > 0) {
-            data.similar_jobs.forEach(job => {
-                similarJobsHtml += `<li style="margin-bottom: 8px; font-size: 0.9rem;">
-                    <strong>${job.title}</strong>
-                </li>`;
+        if (window._neighborJobs.length > 0) {
+            window._neighborJobs.forEach((job, i) => {
+                similarJobsHtml += `
+                    <div class="neighbor-job-item" onclick="toggleNeighborJob(${i})">
+                        <div class="neighbor-job-header">
+                            <strong>${job.title}</strong>
+                            <span class="neighbor-chevron" id="chevron-${i}">▼</span>
+                        </div>
+                        <div class="neighbor-job-body" id="neighbor-job-${i}"></div>
+                    </div>`;
             });
         } else {
-            similarJobsHtml = '<li style="color:#94a3b8;">No similar examples found in training set.</li>';
+            similarJobsHtml = '<p style="color:#94a3b8; font-size:0.9rem;">No transferable roles found in training set.</p>';
         }
 
         if(output) {
@@ -270,12 +293,8 @@ async function runInference() {
                         </div>
                     </div>
                     <div class="result-item">
-                        <div class="label">Top Neighbor Matches</div>
-                        <div class="value" style="margin-top:0.5rem">
-                            <ul style="padding-left: 1.2rem; color:var(--text-primary); text-align: left;">
-                                ${similarJobsHtml}
-                            </ul>
-                        </div>
+                        <div class="label">Transferable Roles — click to view description</div>
+                        <div style="margin-top:0.5rem">${similarJobsHtml}</div>
                     </div>
                 </div>
             `;
